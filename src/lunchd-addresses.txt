@@ -1,0 +1,5 @@
+# sample lunchd email address file
+# format: Full Name <username@hostname>
+# one address per line
+Jolien Creighton <jolien@uwm.edu>
+Jolien Creighton <jolien@gravity.phys.uwm.edu>

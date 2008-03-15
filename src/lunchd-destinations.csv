@@ -1,0 +1,5 @@
+# sample lunchd destinations file
+# format: rank,destination
+0,Bad Restaurant
+1,OK Restaurant
+2,Favorite Restaurant

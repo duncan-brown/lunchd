@@ -1,0 +1,23 @@
+#!/bin/sh
+
+launchlunchd_launchd() {
+}
+
+launchlunchd_crontab() {
+	echo "adding lunchd to the crontab" 1>&2
+	rm -f /tmp/lunchd-crontab.tmp
+	crontab -l > /tmp/lunchd-crontab.tmp
+	if `grep -q lunchd /tmp/lunchd-crontab.tmp` ; then
+		echo "lunchd is already in the crontab" 1>&2
+	else
+		cat lunchd.cron >> /tmp/lunchd-crontab.tmp 
+		crontab /tmp/lunchd-crontab.tmp
+	fi
+}
+
+case "`uname -s`" in
+	Darwin) launchlunchd_launchd;;
+	Linux)  launchlunchd_crontab;;
+	*)	echo "error: don't know how to launch lunchd on this system" 1>&2; exit 1;;
+esac
+exit

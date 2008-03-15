@@ -1,0 +1,34 @@
+#!/bin/sh
+
+verbose="yes"
+message() {
+	test "${verbose}" = "yes" && echo "00boot: $1"
+}
+fail() {
+	echo "00boot: failed $1" >&2
+	exit 1
+}
+
+M4=${M4:-"m4"}
+ACLOCAL=${ACLOCAL:-"aclocal"}
+AUTOHEADER=${AUTOHEADER:-"autoheader"}
+AUTOMAKE=${AUTOMAKE:-"automake"}
+AUTOCONF=${AUTOCONF:-"autoconf"}
+
+# run auto* programs
+message "running aclocal"
+${ACLOCAL} -I aux || fail "aclocal"
+message "running automake"
+${AUTOMAKE} || fail "automake"
+message "running autoconf"
+${AUTOCONF} || fail "autoconf"
+
+message "success"
+test "${verbose}" = "yes" && echo "
+=================================================================
+
+	00boot has been run.
+	Now run './configure'
+
+================================================================="
+exit 0

@@ -1,0 +1,240 @@
+#!/bin/sh
+
+SENDMAIL="@SENDMAIL@ -oi"
+AWK="@AWK@"
+prefix="@prefix@"
+datarootdir="@datarootdir@"
+datadir="@datadir@"
+localstatedir="@localstatedir@"
+pkgdatadir="${datadir}/lunchd"
+pkglocalstatedir="${localstatedir}/lunchd"
+lunchd_destination_file="${pkgdatadir}/lunchd-destinations.csv"
+lunchd_address_file="${pkgdatadir}/lunchd-addresses.txt"
+lunchd_history_file="${pkglocalstatedir}/lunchd-history.log"
+
+# behaviour flags
+lunchd_mail="yes"            # default: send mail
+lunchd_record_history="yes"  # default: record destination in history log
+lunchd_check_history="yes"   # default: check history to avoid repeat dests 
+lunchd_test="no"             # default: don't run in test mode
+
+# prints $1 to stderr and exits with code 1
+lunchd_error() {
+	echo "${1}" 1>&2
+	exit 1
+}
+
+# logs message $1 in lunchd history file
+lunchd_history_log() {
+	# make sure history file exists
+	test -d "`dirname "${lunchd_history_file}"`" || mkdir -p "`dirname "${lunchd_history_file}"`"
+	test -f "${lunchd_history_file}" || touch "${lunchd_history_file}"
+	test -f "${lunchd_history_file}" || lunchd_error "cannot create history file ${lunchd_history_file}"
+	echo "`date +"%F %T"` `hostname -s` lunchd [$$]: ${1}" >> "${lunchd_history_file}"
+}
+
+# returns yesterday's date
+lunchd_yesterday_date() {
+	case "`uname -s`" in
+		Darwin) date -v -1d "+%F";;
+		*) date -d yesterday +"%F"
+	esac
+}
+
+# searches the history log for yesterday's destination
+# returns empty string if not found
+lunchd_yesterday_destination() {
+	last_msg="`tail -1 "${lunchd_history_file}"`"
+	last_msg_date="`echo "${last_msg}" | sed 's/ .*//'`"
+	last_msg_destination="`echo "${last_msg}" | sed 's/.*: //'`"
+	yesterday_date="`lunchd_yesterday_date`"
+	test "${yesterday_date}" = "${last_msg_date}" && echo "${last_msg_destination}" || echo ""
+}
+
+# generates a random number
+lunchd_random() {
+	dd if=/dev/urandom count=1 2>/dev/null | cksum | cut -f1 -d" "
+}
+
+# generates a random integer in the range [0,$1)
+lunchd_random_val() {
+	val=`lunchd_random`
+	val=`expr ${val} % ${1}`
+	echo ${val}
+}
+
+# sums all the ranks in the destination file
+lunchd_sum_rank() {
+	sed '/^#/d' "${lunchd_destination_file}" | "${AWK}" -F, "{ x += \$1 } END { print x }"
+}
+
+# choses a random destination
+lunchd_random_destination() {
+	sum_rank=`lunchd_sum_rank`
+	y=`lunchd_random_val ${sum_rank}`
+	sed '/^#/d' "${lunchd_destination_file}" | "${AWK}" -F, "{ x += \$1; if (x > $y) { print \$2; exit } }"
+}
+
+# selects a destination that wasn't yesterday's destination
+lunchd_select_destination() {
+	destination="`lunchd_random_destination`"
+	if test "${lunchd_check_history}" = "yes" ; then
+		yesterday_destination="`lunchd_yesterday_destination`"
+		while test "${destination}" = "${yesterday_destination}" ; do
+			destination="`lunchd_random_destination`"
+		done
+	fi
+	echo "${destination}"
+}
+
+# composes a mail message for the destination given by $1
+lunchd_compose_message() {
+	echo "From: Lunch Daemon <jolien@gravity.phys.uwm.edu>"
+	echo "Subject: Today's Lunch"
+	echo "Today's lunch will be at ${1}."
+	echo "Enjoy your lunch!"
+}
+
+# list of addresses to send mail
+lunchd_addresses() {
+	sed '/^#/d' "${lunchd_address_file}"
+}
+
+# compose message and send it for the destination given by $1
+# logs the result in the history log
+lunchd_send_message() {
+	message="`lunchd_compose_message "${1}"`"
+	alladdr=""
+	addr=""
+	IFS_save="${IFS}"
+	IFS=',
+	'
+	for address in `lunchd_addresses` ; do
+		case "${address}" in
+			*"<"*">") addr="${addr} `echo "${address}" | sed 's/.*<\(.*\)>.*/\1/'`" ;;
+			*) addr="${addr} ${address}";;
+		esac
+		if test -z "${alladdr}" ; then
+			alladdr="${address}"
+		else
+			alladdr="${alladdr}, ${address}"
+		fi
+	done
+	IFS="${IFS_save}"
+	if test "${lunchd_record_history}" = "yes" ; then
+		lunchd_history_log "${destination}"
+	fi
+	( echo "To: ${alladdr}" && echo "${message}" ) | ${SENDMAIL} ${addr}
+}
+
+# print a usage message and exit
+usage() {
+cat <<EOF
+usage: $0 [options]
+options [defaults in brackets]
+	--no-mail		suppress email [no]
+	--no-log		suppress loging in history [no]
+	--no-history		don't check history to avoid duplicates [no]
+	--address-file=FILE	lunchd address file [${lunchd_address_file}]
+	--destination-file=FILE	lunchd destination file [${lunchd_destination_file}]
+	--history-file=FILE	lunchd history file [${lunchd_history_file}]
+	-h, --help		print this usage message
+EOF
+exit $1 
+}
+
+
+## START HERE
+
+
+# parse command line options
+prev=
+for opt; do
+
+	# pop option off
+	shift
+
+	# if previous option needs an argument, assign it
+	if test -n "${prev}" ; then
+		eval "${prev}=\${opt}"
+		prev=
+		continue
+	fi
+
+	case "${opt}" in
+		-*=*) optarg=`echo "${opt}" | sed 's/[-_a-zA-Z0-9]*=//'` ;;
+		*) optarg= ;;
+	esac
+
+	case "${opt}" in
+
+		# help message
+		-h | --help) usage 0 ;;
+
+		# suppress mail
+		--no-mail) lunchd_mail="no" ;;
+
+		# suppress history log
+		--no-log) lunchd_record_history="no" ;;
+
+		# suppress history check to avoid same destination as yesterday
+		--no-history) lunchd_check_history="no" ;;
+
+		# set address file
+		--address-file) prev="lunchd_address_file" ;;
+		--address-file=*) lunchd_address_file="${optarg}" ;;
+
+		# set destination file
+		--destination-file) prev="lunchd_destination_file" ;;
+		--destination-file=*) lunchd_destination_file="${optarg}" ;;
+
+		# set history log file
+		--history-file) prev="lunchd_history_file" ;;
+		--history-file=*) lunchd_history_file="${optarg}" ;;
+
+		# test mode
+		--test) prev="lunchd_test_trials" ; lunchd_test="yes" ;;
+		--test=*) lunchd_test_trials="${optarg}" ; lunchd_test="yes" ;;
+
+		# unrecognized option
+		*) echo "unrecognized option: ${opt}" 1>&2 ; usage 1 ;;
+
+	esac
+
+done
+
+
+# make sure data files are present
+test -f "${lunchd_destination_file}" || lunchd_error "missing file ${lunchd_destination_file}"
+test -f "${lunchd_address_file}" || lunchd_error "missing file ${lunchd_address_file}"
+
+if test "${lunchd_test}" = "yes" ; then
+	trial=0
+	ntrials=${lunchd_test_trials:-"100"}
+	tmpfile="/tmp/lunchd-test.out"
+	rm -f "${tmpfile}" || lunchd_error "could not unlink file ${tmpfile}"
+	touch "${tmpfile}" || lunchd_error "could not create file ${tmpfile}"
+	while test ${trial} -ne ${ntrials}; do
+		printf "\r${trial} of ${ntrials}" 1>&2
+		trial="`expr ${trial} + 1`"
+		lunchd_select_destination >> "${tmpfile}"
+	done
+	printf "\n" 1>&2
+	mv "${tmpfile}" "${tmpfile}.tmp" || lunchd_error "could not create file ${tmpfile}.tmp"
+	sort "${tmpfile}.tmp" > "${tmpfile}"
+	uniq -c "${tmpfile}" | sort -n
+	exit
+fi
+
+if test "${lunchd_mail}" = "yes" ; then
+	# only send lunch messages on Monday-Thursday
+	# Monday is special: always send to "Lunch Chat"
+	case `date +%u` in
+		1 ) lunchd_send_message "Lunch Chat" ;;
+		2 | 3 | 4 ) lunchd_send_message "`lunchd_select_destination`" || lunchd_error "couldn't send message" ;;
+		5 | 6 | 7 ) exit 0 ;;
+		*) lunchd_error "too many days in this week" ;;
+	esac
+else
+	lunchd_select_destination
+fi
